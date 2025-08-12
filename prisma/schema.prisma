@@ -1,9 +1,189 @@
+// Gerador e conexão
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "go run github.com/steebchen/prisma-client-go"
-  output   = "./prisma/client"
+// Tabelas convertidas
+
+model users {
+  id              Int       @id @default(autoincrement())
+  full_name       String
+  email           String    @unique
+  password_hash   String
+  phone           String?
+  user_type       String    @db.Check("user_type IN ('admin','technician','common')")
+  account_status  String    @db.Check("account_status IN ('active','inactive','suspended')")
+  profile_picture String?
+  language        String?
+  last_login      DateTime?
+  created_at      DateTime  @default(now())
+
+  user_roles            user_roles[]
+  instances             instances[]
+  alerts_created        alerts[]      @relation("alerts_user", fields: [id], references: [user_id])
+  alerts_resolved       alerts[]      @relation("alerts_resolver", fields: [id], references: [resolved_by_user_id])
+  technical_logs        technical_logs[]
+  ai_suggestions        ai_suggestions[]
+  reports               reports[]
+  notifications         notifications[]
+}
+
+model roles {
+  id               Int              @id @default(autoincrement())
+  name             String
+  description      String?
+  created_at       DateTime         @default(now())
+
+  user_roles       user_roles[]
+  role_permissions role_permissions[]
+}
+
+model permissions {
+  id               Int               @id @default(autoincrement())
+  name             String
+  description      String?
+  created_at       DateTime          @default(now())
+
+  role_permissions role_permissions[]
+}
+
+model user_roles {
+  user_id Int
+  role_id Int
+
+  users users @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  roles roles @relation(fields: [role_id], references: [id], onDelete: Cascade)
+
+  @@id([user_id, role_id])
+}
+
+model role_permissions {
+  role_id       Int
+  permission_id Int
+
+  roles       roles       @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  permissions permissions @relation(fields: [permission_id], references: [id], onDelete: Cascade)
+
+  @@id([role_id, permission_id])
+}
+
+model instances {
+  id              Int       @id @default(autoincrement())
+  instance_name   String
+  description     String?
+  monitoring_type String    @db.Check("monitoring_type IN ('ping','API','SNMP','webhook')")
+  target_url      String
+  user_id         Int
+  current_status  String    @db.Check("current_status IN ('up','down','unstable')")
+  tags            String[]
+  category        String?
+  created_at      DateTime  @default(now())
+
+  users          users       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  metrics        metrics[]
+  alerts         alerts[]
+  technical_logs technical_logs[]
+  ai_suggestions ai_suggestions[]
+  sla_tracking   sla_tracking[]
+}
+
+model metrics {
+  id             Int       @id @default(autoincrement())
+  instance_id    Int
+  metric_name    String
+  value          Decimal
+  unit           String?
+  previous_value Decimal?
+  delta          Decimal?
+  timestamp      DateTime  @default(now())
+
+  instances instances @relation(fields: [instance_id], references: [id], onDelete: Cascade)
+}
+
+model alerts {
+  id                  Int       @id @default(autoincrement())
+  user_id             Int?
+  instance_id         Int
+  alert_type          String    @db.Check("alert_type IN ('failure','prediction','technical')")
+  severity            String    @db.Check("severity IN ('high','medium','low')")
+  message             String?
+  predicted           Boolean   @default(false)
+  resolved            Boolean   @default(false)
+  resolved_at         DateTime?
+  resolved_by_user_id Int?
+  timestamp           DateTime  @default(now())
+
+  user_creator users? @relation("alerts_user", fields: [user_id], references: [id], onDelete: SetNull)
+  user_resolver users? @relation("alerts_resolver", fields: [resolved_by_user_id], references: [id], onDelete: SetNull)
+  instances    instances @relation(fields: [instance_id], references: [id], onDelete: Cascade)
+}
+
+model technical_logs {
+  id         Int       @id @default(autoincrement())
+  user_id    Int?
+  instance_id Int
+  event      String
+  log_json   Json
+  status     String    @db.Check("status IN ('success','failure','timeout')")
+  timestamp  DateTime  @default(now())
+
+  users     users?     @relation(fields: [user_id], references: [id], onDelete: SetNull)
+  instances instances  @relation(fields: [instance_id], references: [id], onDelete: Cascade)
+}
+
+model ai_suggestions {
+  id                   Int       @id @default(autoincrement())
+  user_id              Int
+  instance_id          Int
+  problem_description  String
+  detailed_explanation String
+  resolution_suggestion String
+  prediction_confidence Float
+  problem_type         String
+  accepted_by_user     Boolean   @default(false)
+  generated_at         DateTime  @default(now())
+
+  users     users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  instances instances @relation(fields: [instance_id], references: [id], onDelete: Cascade)
+}
+
+model reports {
+  id               Int       @id @default(autoincrement())
+  user_id          Int
+  period_start     DateTime?
+  period_end       DateTime?
+  monthly_sla      Float?
+  uptime_percentage Float?
+  summary          String?
+  created_at       DateTime  @default(now())
+
+  users users @relation(fields: [user_id], references: [id], onDelete: Cascade)
+}
+
+model sla_tracking {
+  id               Int       @id @default(autoincrement())
+  instance_id      Int
+  time_window      String    @db.Check("time_window IN ('daily','weekly','monthly')")
+  uptime_percentage Float?
+  sla_target       Float?
+  calculated_at    DateTime  @default(now())
+
+  instances instances @relation(fields: [instance_id], references: [id], onDelete: Cascade)
+}
+
+model notifications {
+  id                Int       @id @default(autoincrement())
+  user_id           Int
+  message           String
+  notification_type String    @db.Check("notification_type IN ('system','info','marketing')")
+  delivery_method   String    @db.Check("delivery_method IN ('email','SMS','push','WhatsApp')")
+  delivery_status   String    @db.Check("delivery_status IN ('sent','failed','scheduled')")
+  sent_at           DateTime?
+
+  users users @relation(fields: [user_id], references: [id], onDelete: Cascade)
 }
