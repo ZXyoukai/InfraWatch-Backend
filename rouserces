@@ -1,0 +1,357 @@
+// Project: restful-go-prisma-jwt
+// Layout: MVC + repository + prisma-client-go + JWT middleware
+// Files are shown as sections. Drop them into your project files accordingly.
+
+// --- file: prisma/schema.prisma
+// datasource & generator
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "go run github.com/steebchen/prisma-client-go"
+  output   = "./prisma/client"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  password  String
+  role      String   @default("user")
+  posts     Post[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Post {
+  id        String   @id @default(uuid())
+  title     String
+  body      String
+  published Boolean  @default(false)
+  author    User     @relation(fields: [authorId], references: [id])
+  authorId  String
+  createdAt DateTime @default(now())
+}
+
+
+// --- file: go.mod
+module github.com/youruser/restful-go-prisma-jwt
+
+go 1.20
+
+require (
+    github.com/steebchen/prisma-client-go v0.0.0-... // run go get to set exact
+    github.com/go-chi/chi/v5 v5.0.8
+    github.com/joho/godotenv v1.5.1
+    golang.org/x/crypto v0.12.0
+    github.com/golang-jwt/jwt/v5 v5.0.0
+)
+
+
+// --- file: README.md (commands)
+// Initialize project
+// 1. create schema at prisma/schema.prisma (see above)
+// 2. generate prisma client + run migrations
+//    go run github.com/steebchen/prisma-client-go migrate dev --name init
+//    go run github.com/steebchen/prisma-client-go generate
+// 3. go mod tidy
+// 4. run: go run ./cmd/server
+
+
+// --- file: cmd/server/main.go
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+    "os"
+
+    "github.com/go-chi/chi/v5"
+    "github.com/joho/godotenv"
+    "github.com/youruser/restful-go-prisma-jwt/internal/http/handlers"
+    "github.com/youruser/restful-go-prisma-jwt/internal/http/middleware"
+    "github.com/youruser/restful-go-prisma-jwt/internal/prismaClient"
+)
+
+func main() {
+    if err := godotenv.Load(); err != nil {
+        log.Println(".env not loaded, relying on env vars")
+    }
+
+    ctx := context.Background()
+
+    client, err := prismaClient.NewClient(ctx)
+    if err != nil {
+        log.Fatalln("prisma client init:", err)
+    }
+    defer client.Disconnect()
+
+    r := chi.NewRouter()
+
+    r.Post("/api/auth/register", handlers.RegisterHandler(client))
+    r.Post("/api/auth/login", handlers.LoginHandler(client))
+
+    // protected routes
+    r.Group(func(r chi.Router) {
+        r.Use(middleware.JWTAuth)
+        r.Get("/api/me", handlers.MeHandler(client))
+        r.Route("/api/posts", func(r chi.Router) {
+            r.Get("/", handlers.ListPosts(client))
+            r.Post("/", handlers.CreatePost(client))
+            r.Get("/{id}", handlers.GetPost(client))
+            r.Put("/{id}", handlers.UpdatePost(client))
+            r.Delete("/{id}", handlers.DeletePost(client))
+        })
+    })
+
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = "8080"
+    }
+
+    log.Println("listening on :" + port)
+    http.ListenAndServe(":"+port, r)
+}
+
+
+// --- file: internal/prismaClient/client.go
+package prismaClient
+
+import (
+    "context"
+
+    "github.com/steebchen/prisma-client-go/runtime/transaction"
+    prisma "github.com/youruser/restful-go-prisma-jwt/prisma/client"
+)
+
+type Client struct{
+    Client *prisma.PrismaClient
+}
+
+func NewClient(ctx context.Context) (*Client, error) {
+    p := prisma.NewClient()
+    if err := p.Connect(); err != nil {
+        return nil, err
+    }
+    // optional: test connection
+    _ = transaction.NewTxManager(nil)
+    return &Client{Client: p}, nil
+}
+
+func (c *Client) Disconnect() error {
+    return c.Client.Disconnect()
+}
+
+
+// --- file: internal/http/middleware/jwt.go
+package middleware
+
+import (
+    "context"
+    "net/http"
+    "os"
+    "strings"
+
+    "github.com/golang-jwt/jwt/v5"
+)
+
+type ctxKey string
+
+const AuthUserKey ctxKey = "authUser"
+
+func JWTAuth(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        auth := r.Header.Get("Authorization")
+        if auth == "" {
+            http.Error(w, "missing auth", http.StatusUnauthorized)
+            return
+        }
+        parts := strings.SplitN(auth, " ", 2)
+        if len(parts) != 2 || parts[0] != "Bearer" {
+            http.Error(w, "invalid auth header", http.StatusUnauthorized)
+            return
+        }
+        tokenStr := parts[1]
+        secret := os.Getenv("JWT_SECRET")
+        token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+            return []byte(secret), nil
+        })
+        if err != nil || !token.Valid {
+            http.Error(w, "invalid token", http.StatusUnauthorized)
+            return
+        }
+        claims, ok := token.Claims.(jwt.MapClaims)
+        if !ok {
+            http.Error(w, "invalid claims", http.StatusUnauthorized)
+            return
+        }
+        // attach user data to context
+        ctx := context.WithValue(r.Context(), AuthUserKey, claims)
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
+}
+
+
+// --- file: internal/http/handlers/auth.go
+package handlers
+
+import (
+    "context"
+    "encoding/json"
+    "net/http"
+    "os"
+    "time"
+
+    "golang.org/x/crypto/bcrypt"
+    "github.com/golang-jwt/jwt/v5"
+    prismaClient "github.com/youruser/restful-go-prisma-jwt/internal/prismaClient"
+    prisma "github.com/youruser/restful-go-prisma-jwt/prisma/client"
+)
+
+func RegisterHandler(pc *prismaClient.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        var in struct{ Email, Name, Password string }
+        if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+            http.Error(w, "bad request", http.StatusBadRequest)
+            return
+        }
+        hash, _ := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
+        user, err := pc.Client.User.CreateOne(
+            prisma.User.Email.Set(in.Email),
+            prisma.User.Name.Set(&in.Name),
+            prisma.User.Password.Set(string(hash)),
+        ).Exec(context.Background())
+        if err != nil {
+            http.Error(w, "unable to create user", http.StatusInternalServerError)
+            return
+        }
+        user.Password = ""
+        json.NewEncoder(w).Encode(user)
+    }
+}
+
+func LoginHandler(pc *prismaClient.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        var in struct{ Email, Password string }
+        if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+            http.Error(w, "bad request", http.StatusBadRequest)
+            return
+        }
+        user, err := pc.Client.User.FindUnique(
+            prisma.User.Email.Equals(in.Email),
+        ).Exec(context.Background())
+        if err != nil || user == nil {
+            http.Error(w, "invalid credentials", http.StatusUnauthorized)
+            return
+        }
+        if bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(in.Password)) != nil {
+            http.Error(w, "invalid credentials", http.StatusUnauthorized)
+            return
+        }
+        // create JWT
+        token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+            "sub": user.ID,
+            "email": user.Email,
+            "role": user.Role,
+            "exp": time.Now().Add(24 * time.Hour).Unix(),
+        })
+        secret := os.Getenv("JWT_SECRET")
+        ss, _ := token.SignedString([]byte(secret))
+        json.NewEncoder(w).Encode(map[string]string{"token": ss})
+    }
+}
+
+// --- file: internal/http/handlers/user.go
+package handlers
+
+import (
+    "encoding/json"
+    "net/http"
+
+    "github.com/golang-jwt/jwt/v5"
+    "github.com/youruser/restful-go-prisma-jwt/internal/http/middleware"
+    prismaClient "github.com/youruser/restful-go-prisma-jwt/internal/prismaClient"
+)
+
+func MeHandler(pc *prismaClient.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        claims := r.Context().Value(middleware.AuthUserKey).(jwt.MapClaims)
+        json.NewEncoder(w).Encode(claims)
+    }
+}
+
+
+// --- file: internal/http/handlers/posts.go
+package handlers
+
+import (
+    "context"
+    "encoding/json"
+    "net/http"
+
+    "github.com/go-chi/chi/v5"
+    prismaClient "github.com/youruser/restful-go-prisma-jwt/internal/prismaClient"
+    prisma "github.com/youruser/restful-go-prisma-jwt/prisma/client"
+)
+
+func ListPosts(pc *prismaClient.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        posts, _ := pc.Client.Post.FindMany().Exec(context.Background())
+        json.NewEncoder(w).Encode(posts)
+    }
+}
+
+func CreatePost(pc *prismaClient.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        var in struct{ Title, Body string }
+        json.NewDecoder(r.Body).Decode(&in)
+        p, _ := pc.Client.Post.CreateOne(
+            prisma.Post.Title.Set(in.Title),
+            prisma.Post.Body.Set(in.Body),
+        ).Exec(context.Background())
+        json.NewEncoder(w).Encode(p)
+    }
+}
+
+func GetPost(pc *prismaClient.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        id := chi.URLParam(r, "id")
+        p, _ := pc.Client.Post.FindUnique(
+            prisma.Post.ID.Equals(id),
+        ).Exec(context.Background())
+        if p == nil { http.NotFound(w, r); return }
+        json.NewEncoder(w).Encode(p)
+    }
+}
+
+func UpdatePost(pc *prismaClient.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        id := chi.URLParam(r, "id")
+        var in struct{ Title, Body string; Published *bool }
+        json.NewDecoder(r.Body).Decode(&in)
+        up := pc.Client.Post.FindUnique(prisma.Post.ID.Equals(id)).Update(
+            prisma.Post.Title.Set(in.Title),
+            prisma.Post.Body.Set(in.Body),
+        ).Exec(context.Background())
+        json.NewEncoder(w).Encode(up)
+    }
+}
+
+func DeletePost(pc *prismaClient.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        id := chi.URLParam(r, "id")
+        pc.Client.Post.FindUnique(prisma.Post.ID.Equals(id)).Delete().Exec(context.Background())
+        w.WriteHeader(http.StatusNoContent)
+    }
+}
+
+
+// --- Notes
+// - The code is a scaffold: add proper error handling, input validation (use go-playground/validator), logging and config management.
+// - Use role-based middleware for admin-only routes: read JWT claims and check role before allowing.
+// - For production, rotate JWT secret, use HTTPS, refresh tokens, rate-limit endpoints, and enable CORS.
+
+// End of scaffold. Paste files into your project and run the README commands.
