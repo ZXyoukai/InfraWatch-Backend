@@ -6,8 +6,8 @@ import (
     "net/http"
 
     "github.com/go-chi/chi/v5"
-    prismaClient "github.com/youruser/restful-go-prisma-jwt/internal/prismaClient"
-    prisma "github.com/youruser/restful-go-prisma-jwt/prisma/client"
+    prismaClient "github.com/ZXyoukai/InfraWatch-Backend/internal/prismaClient"
+    prisma "github.com/ZXyoukai/InfraWatch-Backend/prisma/client"
 )
 
 func ListPosts(pc *prismaClient.Client) http.HandlerFunc {

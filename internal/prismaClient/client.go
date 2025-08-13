@@ -4,7 +4,7 @@ import (
     "context"
 
     "github.com/steebchen/prisma-client-go/runtime/transaction"
-    prisma "github.com/youruser/restful-go-prisma-jwt/prisma/client"
+    prisma "github.com/ZXyoukai/InfraWatch-Backend/prisma/client"
 )
 
 type Client struct{

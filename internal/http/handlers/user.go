@@ -5,8 +5,8 @@ import (
     "net/http"
 
     "github.com/golang-jwt/jwt/v5"
-    "github.com/youruser/restful-go-prisma-jwt/internal/http/middleware"
-    prismaClient "github.com/youruser/restful-go-prisma-jwt/internal/prismaClient"
+    "github.com/ZXyoukai/InfraWatch-Backend/internal/http/middleware"
+    prismaClient "github.com/ZXyoukai/InfraWatch-Backend/internal/prismaClient"
 )
 
 func MeHandler(pc *prismaClient.Client) http.HandlerFunc {

@@ -9,8 +9,8 @@ import (
 
     "golang.org/x/crypto/bcrypt"
     "github.com/golang-jwt/jwt/v5"
-    prismaClient "github.com/youruser/restful-go-prisma-jwt/internal/prismaClient"
-    prisma "github.com/youruser/restful-go-prisma-jwt/prisma/client"
+    prismaClient "github.com/ZXyoukai/InfraWatch-Backend/internal/prismaClient"
+    prisma "github.com/ZXyoukai/InfraWatch-Backend/prisma/client"
 )
 
 func RegisterHandler(pc *prismaClient.Client) http.HandlerFunc {

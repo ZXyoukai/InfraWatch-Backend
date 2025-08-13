@@ -8,9 +8,9 @@ import (
 
     "github.com/go-chi/chi/v5"
     "github.com/joho/godotenv"
-    "github.com/youruser/restful-go-prisma-jwt/internal/http/handlers"
-    "github.com/youruser/restful-go-prisma-jwt/internal/http/middleware"
-    "github.com/youruser/restful-go-prisma-jwt/internal/prismaClient"
+    "github.com/ZXyoukai/InfraWatch-Backend/internal/http/handlers"
+    "github.com/ZXyoukai/InfraWatch-Backend/internal/http/middleware"
+    "github.com/ZXyoukai/InfraWatch-Backend/internal/prismaClient"
 )
 
 func main() {
